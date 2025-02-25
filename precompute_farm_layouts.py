@@ -169,15 +169,38 @@ def get_configs(n_seeds, n_turbines_default=None):
 
 def worker_init(output_dir):
     """Initialize per-worker temporary HDF5 file"""
+    import os  # Import at the beginning of the function
+    import logging
+    import h5py
+    import numpy as np
+    from multiprocessing import current_process
+    
+    logger = logging.getLogger(__name__)
     worker_id = current_process().pid
     worker_file = os.path.join(output_dir, f"worker_{worker_id}.h5")
     
     # Store file path on worker process object
     current_process().worker_file = worker_file
     
-    # Initialize empty HDF5 file
-    with h5py.File(worker_file, 'w') as f:
-        pass
+    # Initialize empty HDF5 file with a test dataset to ensure it's valid
+    try:
+        with h5py.File(worker_file, 'w') as f:
+            f.create_dataset('init', data=np.array([1]))
+            logger.info(f"Worker {worker_id}: Successfully initialized HDF5 file")
+    except Exception as e:
+        logger.error(f"Worker {worker_id}: Failed to create HDF5 file: {str(e)}")
+
+    # Force process affinity to separate cores (Linux only)
+    try:
+        import psutil
+        process = psutil.Process()
+        # Get worker index from Pool (not the pid)
+        worker_idx = int(current_process().name.split('-')[-1]) if '-' in current_process().name else 0
+        # Set affinity to a specific CPU core
+        process.cpu_affinity([worker_idx % os.cpu_count()])
+        logger.info(f"Worker {worker_id} assigned to CPU {worker_idx % os.cpu_count()}")
+    except Exception as e:
+        logger.warning(f"Worker {worker_id}: CPU affinity setup failed: {str(e)}")
 
 
 def optimize_layout(config, farm_boundaries, grid_size=18, random_pct=30, update_interval=None):
@@ -241,7 +264,7 @@ def optimize_layout(config, farm_boundaries, grid_size=18, random_pct=30, update
         # Save to worker-specific file
         with h5py.File(worker_file, 'a') as f:
             grp = f.create_group(f"farm{farm_idx}_t{config['type_idx']}_s{config['ss_seed']}")
-            grp.create_dataset('layout', data=np.vstack([problem.x, problem.y]))
+            grp.create_dataset('layout', data=np.vstack([problem['x'], problem['y']]))
             grp.create_dataset('aep', data=problem.cost) 
             for k, v in config.items():
                 grp.attrs[k] = v
@@ -284,7 +307,8 @@ def main():
     with Pool(
         processes=args.processes,
         initializer=worker_init,
-        initargs=(temp_dir,)
+        initargs=(temp_dir,),
+        maxtasksperchild=10
     ) as pool:
         optimize_partial = partial(optimize_layout, 
                                  farm_boundaries=farm_boundaries,
@@ -348,4 +372,6 @@ def main():
 
 
 if __name__ == "__main__":
+    import multiprocessing
+    multiprocessing.set_start_method('spawn', force=True)
     main()
