@@ -9,6 +9,7 @@ import logging
 import os
 import glob
 import time
+import sys
 
 from py_wake.wind_turbines.generic_wind_turbines import GenericWindTurbine
 from py_wake.site import UniformSite
@@ -27,6 +28,65 @@ from topfarm.constraint_components.boundary import XYBoundaryConstraint
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+def get_config_key(config):
+    """Generate a unique key for a configuration to identify it in the output file"""
+    return f"farm{config['farm_idx']}_t{config['type_idx']}_s{config['ss_seed']}"
+
+
+def scan_existing_results(output_file):
+    """Scan existing output file to identify already completed configurations
+    
+    Args:
+        output_file: Path to the HDF5 output file
+        
+    Returns:
+        Dictionary of completed configuration keys
+    """
+    completed_configs = {}
+    
+    if not os.path.exists(output_file):
+        return completed_configs
+    
+    try:
+        with h5py.File(output_file, 'r') as f:
+            # Skip top-level attributes and only process groups
+            for key in f.keys():
+                if isinstance(f[key], h5py.Group):
+                    # Read the attributes to reconstruct the configuration
+                    config = {}
+                    for attr_name, attr_value in f[key].attrs.items():
+                        config[attr_name] = attr_value
+                    
+                    # Check if this configuration has all required data
+                    if 'layout' in f[key] and 'aep' in f[key]:
+                        config_key = key  # Use the group name as the key directly
+                        completed_configs[config_key] = config
+                    
+        logger.info(f"Found {len(completed_configs)} completed configurations in {output_file}")
+    except Exception as e:
+        logger.warning(f"Error scanning existing results: {e}")
+    
+    return completed_configs
+
+
+def filter_completed_configs(configs, completed_configs):
+    """Filter out configurations that have already been completed
+    
+    Args:
+        configs: List of configuration dictionaries
+        completed_configs: Dictionary of completed configuration keys
+        
+    Returns:
+        List of configurations that still need to be run
+    """
+    remaining_configs = []
+    
+    for config in configs:
+        config_key = get_config_key(config)
+        if config_key not in completed_configs:
+            remaining_configs.append(config)
+    
+    return remaining_configs
 
 def load_farm_boundaries():
     """Load pre-defined boundary coordinates for all farms in the study"""
@@ -290,6 +350,7 @@ def main():
     parser.add_argument("--random-pct", type=int, default=30, help="Smart start random percentage")
     parser.add_argument("--chunk-size", type=int, default=1, help="Chunk size for parallel processing")
     parser.add_argument("--progress-interval", type=float, default=5.0, help="Progress bar update interval in seconds")
+    parser.add_argument("--no-hot-start", action="store_true", help="Disable hot start (ignore existing results)")
     args = parser.parse_args()
 
     # Setup temporary storage
@@ -303,7 +364,24 @@ def main():
     configs = get_configs(args.seeds)
     logger.info(f"Created {len(configs)} configurations to optimize")
 
-            # Create pool with worker-specific files
+    completed_configs = {}
+    if not args.no_hot_start:
+        completed_configs = scan_existing_results(args.output)
+        if completed_configs:
+            original_count = len(configs)
+            configs = filter_completed_configs(configs, completed_configs)
+            logger.info(f"Hot start enabled: {original_count - len(configs)} configurations already completed")
+            logger.info(f"Remaining configurations to run: {len(configs)}")
+            print(f"Hot start: {original_count - len(configs)} configurations already completed, {len(configs)} remaining", 
+                  file=sys.stderr, flush=True)
+    
+    # If all configurations are already completed, we're done
+    if not configs:
+        logger.info("All configurations already completed. Nothing to do.")
+        print("All configurations already completed. Nothing to do.", file=sys.stderr, flush=True)
+        return
+
+    # Create pool with worker-specific files
     with Pool(
         processes=args.processes,
         initializer=worker_init,
@@ -351,18 +429,26 @@ def main():
     logger.info(f"Completed {success_count}/{len(configs)} optimizations successfully")
 
     # Merge worker files into final output
-    with h5py.File(args.output, 'w') as h5_out:
+    if not args.no_hot_start and os.path.exists(args.output):
+        # Use append mode to preserve existing results
+        mode = 'a'
+    else:
+        # Use write mode for new file or when hot start is disabled
+        mode = 'w'
+    
+    with h5py.File(args.output, mode) as h5_out:
         # Add metadata
         h5_out.attrs['grid_size'] = args.grid_size
         h5_out.attrs['random_pct'] = args.random_pct
-        h5_out.attrs['total_configs'] = len(configs)
-        h5_out.attrs['successful_configs'] = success_count
+        h5_out.attrs['total_configs'] = len(configs) + len(completed_configs)
+        h5_out.attrs['successful_configs'] = success_count + len(completed_configs)
         
         # Copy data from worker files
         for worker_file in glob.glob(os.path.join(temp_dir, "worker_*.h5")):
             with h5py.File(worker_file, 'r') as h5_in:
                 for key in h5_in:
-                    h5_out.copy(h5_in[key], key)
+                    if key != 'init' and key not in h5_out:  # Skip 'init' dataset and avoid duplicates
+                        h5_out.copy(h5_in[key], key)
             # Clean up worker file
             os.remove(worker_file)
     
