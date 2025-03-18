@@ -456,8 +456,17 @@ def main():
     os.rmdir(temp_dir)
     logger.info(f"Results saved to {args.output}")
 
+# Add more detailed exception handling
+def handle_exception(exc_type, exc_value, exc_traceback):
+    logger.error("Uncaught exception", exc_info=(exc_type, exc_value, exc_traceback))
+    print(f"CRITICAL ERROR: Uncaught {exc_type.__name__}: {exc_value}", file=sys.stderr)
+    print("See log for complete traceback", file=sys.stderr)
+
+# Install exception handler
+sys.excepthook = handle_exception
 
 if __name__ == "__main__":
     import multiprocessing
     multiprocessing.set_start_method('spawn', force=True)
     main()
+
