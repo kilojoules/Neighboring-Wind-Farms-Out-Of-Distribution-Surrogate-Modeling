@@ -308,7 +308,7 @@ def optimize_layout(config, farm_boundaries, grid_size=18, random_pct=30, update
                 grad_method=autograd),  # Use autograd for gradients
             constraints=[
                 XYBoundaryConstraint(boundary, boundary_type='polygon'),
-                SpacingConstraint(config['diameter'] * 1.1)  # 1.1D spacing constraint
+                SpacingConstraint(config['diameter'] * 3)  # 1.1D spacing constraint
             ]
         )
 
