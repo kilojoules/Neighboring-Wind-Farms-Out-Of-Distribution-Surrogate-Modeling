@@ -282,16 +282,7 @@ def optimize_layout(config, farm_boundaries, grid_size=18, random_pct=30, update
         turbine = turbine_types[config['type_idx']]
 
         # Initialize site - try to load from cache first
-        site_cache_file = f"site_cache_farm_{farm_idx}.nc"
-        if os.path.exists(site_cache_file):
-            try:
-                site = XRSite.load(site_cache_file)
-                logger.info(f"Loaded site from cache: {site_cache_file}")
-            except Exception as e:
-                logger.warning(f"Failed to load site from cache: {e}")
-                site = UniformSite(ti=0.1)
-        else:
-            site = UniformSite(ti=0.1)
+        site = XRSite.load('ref_site.nc')
         
         # Initialize random layout positions
         x_min, x_max = min(b[0] for b in boundary), max(b[0] for b in boundary)
