@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
+import h5py
 import numpy as np
 import xarray as xr
 import pandas as pd
@@ -9,12 +10,14 @@ import os
 from pathlib import Path
 import argparse
 
+from py_wake.site.xrsite import XRSite
 from py_wake.wind_turbines.generic_wind_turbines import GenericWindTurbine
 from py_wake.site import UniformSite  # Changed from GlobalWindAtlasSite
 from py_wake.wind_turbines import WindTurbines
 from py_wake import Nygaard_2022
 from py_wake.wind_turbines.power_ct_functions import SimpleYawModel, PowerCtTabular
 from py_wake.wind_turbines._wind_turbines import WindTurbine
+from precompute_farm_layouts import get_turbine_types
 
 from topfarm._topfarm import TopFarmProblem
 from topfarm.plotting import XYPlotComp
@@ -23,6 +26,18 @@ from topfarm.cost_models.py_wake_wrapper import PyWakeAEPCostModelComponent
 from topfarm.constraint_components.spacing import SpacingConstraint
 from topfarm.constraint_components.boundary import XYBoundaryConstraint
 
+
+def get_layout_from_h5(farm_idx, type_idx, seed):
+    """Get turbine layout from HDF5 file based on farm, type, and seed parameters."""
+    config_key = f"farm{farm_idx}_t{type_idx}_s{seed}"
+    
+    with h5py.File(H5_FILE, 'r') as f:
+        if config_key in f:
+            # Get layout dataset which should be an array of shape (2, n_turbines)
+            layout_data = f[config_key]['layout'][:]
+            return layout_data[0], layout_data[1]  # x and y coordinates
+        else:
+            return None, None
 
 def evaluate_sample(sample_no, output_dir, n_points=18, random_pct=50):
     """Evaluate a single sample configuration."""
@@ -51,6 +66,8 @@ def evaluate_sample(sample_no, output_dir, n_points=18, random_pct=50):
     ]
     
     # Add no-wake reference turbine
+    # this is used for computing external wake losses
+    # since the internal turbines are fixed, we only need this one additional turbine type
     u = wt_ref.powerCtFunction.ws_tab
     p, _ = wt_ref.powerCtFunction.power_ct_tab
     ct = np.zeros_like(p)
@@ -60,88 +77,28 @@ def evaluate_sample(sample_no, output_dir, n_points=18, random_pct=50):
     wt_ref_no_wake = WindTurbine('WT_ref_no_wake', 240, 150, powerCtFunction)
     wt_list.append(wt_ref_no_wake)
     
-    # Get target farm layout
-    target_ss_file = f'ss_state_target_wf_{15}_{n_points}_{random_pct}.pkl'
-    if os.path.exists(target_ss_file):
-        with open(target_ss_file, 'rb') as f:
-            state = pickle.load(f)
-    else:
-        nwt = 66  # Number of turbines in target farm
-        bound = farm_list[0]
-        x_init = (np.random.random(nwt)-0.5)*1000+np.mean(bound[0])
-        y_init = (np.random.random(nwt)-0.5)*1000+np.mean(bound[1])
-        
-        wf_model = Nygaard_2022(site, wt_ref)
-        problem = TopFarmProblem(
-            design_vars={'x': x_init, 'y': y_init},
-            cost_comp=PyWakeAEPCostModelComponent(wf_model, nwt, grad_method='autograd'),
-            constraints=[
-                XYBoundaryConstraint(np.asarray(bound).T, boundary_type='polygon'),
-                SpacingConstraint(wt_ref.diameter())
-            ],
-            plot_comp=XYPlotComp()
-        )
-        
-        xs = np.linspace(np.min(bound[0]), np.max(bound[0]), n_points)
-        ys = np.linspace(np.min(bound[1]), np.max(bound[1]), n_points)
-        YY, XX = np.meshgrid(ys, xs)
-        problem.smart_start(XX, YY, problem.cost_comp.get_aep4smart_start(), 
-                          random_pct=random_pct, seed=0)
-        state = problem.state
-        
-        os.makedirs(os.path.dirname(target_ss_file), exist_ok=True)
-        with open(target_ss_file, 'wb') as f:
-            pickle.dump(state, f)
-    
-    x_target = list(state['x'])
-    y_target = list(state['y'])
+    target_layout = get_layout_from_h5(farm_idx=0, type_idx=5, seed=0)
+    x_target = target_layout[0]
+    y_target = target_layout[1]
     
     # Get neighbor farm layouts
     x_neighbours = []
     y_neighbours = []
     nwt_list = []
     
-    for n, (rp, seed) in enumerate(zip(rated_powers, ss_seeds)):
-        nwt = int(1000/rp)  # Calculate number of turbines based on rated power
+    # iterate through eafch farm
+    for n, (turbid, seed) in enumerate(zip(sample_data.rated_power - 10, ss_seeds)):
+        # rp = turbs[turbid]?
+        #nwt = int(1000/rp)  # Calculate number of turbines based on rated power
+        #if n == 0: continue
+        nwt = 1000 // int(turbid + 10)
         nwt_list.append(nwt)
         
-        ss_file = os.path.join(output_dir, f'ss_states/ss_state_{rp}_{seed}_{n}.pkl')
-        os.makedirs(os.path.dirname(ss_file), exist_ok=True)
-        
-        if os.path.exists(ss_file):
-            with open(ss_file, 'rb') as f:
-                state = pickle.load(f)
-        else:
-            bound = farm_list[n+1]
-            wt = wt_list[rp-10]  # Map RP to turbine index
-            
-            x_init = (np.random.random(nwt)-0.5)*1000+np.mean(bound[0])
-            y_init = (np.random.random(nwt)-0.5)*1000+np.mean(bound[1])
-            
-            wf_model = Nygaard_2022(site, wt)
-            problem = TopFarmProblem(
-                design_vars={'x': x_init, 'y': y_init},
-                cost_comp=PyWakeAEPCostModelComponent(wf_model, nwt, grad_method='autograd'),
-                constraints=[
-                    XYBoundaryConstraint(np.asarray(bound).T, boundary_type='polygon'),
-                    SpacingConstraint(wt.diameter())
-                ],
-                plot_comp=XYPlotComp()
-            )
-            
-            xs = np.linspace(np.min(bound[0]), np.max(bound[0]), n_points)
-            ys = np.linspace(np.min(bound[1]), np.max(bound[1]), n_points)
-            YY, XX = np.meshgrid(ys, xs)
-            problem.smart_start(XX, YY, problem.cost_comp.get_aep4smart_start(), 
-                              random_pct=random_pct, seed=seed)
-            state = problem.state
-            
-            with open(ss_file, 'wb') as f:
-                pickle.dump(state, f)
-        
-        x_neighbours.append(list(state['x']))
-        y_neighbours.append(list(state['y']))
-    
+        neighbor_layout = get_layout_from_h5(farm_idx=n, type_idx=int(turbid), seed=seed)
+        x_neighbours.append(list(neighbor_layout[0]))
+        y_neighbours.append(list(neighbor_layout[1]))
+        assert(neighbor_layout[0].size == nwt) # todo: wrong size atm
+
     # Run simulations for each time period
     sequence = np.argsort(construction_days)
     construction_days_sorted = np.sort(construction_days)
@@ -211,11 +168,7 @@ def evaluate_samples(start_sample, end_sample, output_dir):
     
     for sample_no in range(start_sample, end_sample + 1):
         print(f"Processing sample {sample_no}")
-        try:
-            evaluate_sample(sample_no, output_dir)
-        except Exception as e:
-            print(f"Error processing sample {sample_no}: {str(e)}")
-            continue
+        evaluate_sample(sample_no, output_dir)
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Evaluate wind farm samples")
@@ -225,4 +178,5 @@ if __name__ == "__main__":
     
     args = parser.parse_args()
     
+    H5_FILE = "re_precomputed_layouts.h5"
     evaluate_samples(args.start, args.end, args.output)
