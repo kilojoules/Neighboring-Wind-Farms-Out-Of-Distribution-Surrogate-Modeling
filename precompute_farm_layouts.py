@@ -193,7 +193,7 @@ def get_turbine_types():
     return turbines
 
 
-def get_configs(n_seeds, n_turbines_default=None):
+def get_configs(n_seeds):
     """Generate optimization configurations with scaling of turbine count
     
     Args:
@@ -201,20 +201,16 @@ def get_configs(n_seeds, n_turbines_default=None):
         n_turbines_default: Optional dictionary of farm_idx to turbine count
                            If None, use default of 66 for farm 0, 50 for others
     """
-    if n_turbines_default is None:
-        n_turbines_default = {0: 66}  # Default is 66 for farm 0
-    
     turbine_types = get_turbine_types()
     
     configs = []
     for farm_idx in range(10):
         for type_idx in range(len(turbine_types)):
             for seed in range(n_seeds):
-                # Get number of turbines (default to 50 if not specified)
-                n_turbines = n_turbines_default.get(farm_idx, 50)
                 
-                # Get diameter from the actual turbine type
                 diameter = turbine_types[type_idx].diameter()
+                rp = np.arange(10, 16).astype(int)[type_idx]
+                n_turbines = int(1000 // rp)
                 
                 configs.append({
                     'farm_idx': farm_idx,
