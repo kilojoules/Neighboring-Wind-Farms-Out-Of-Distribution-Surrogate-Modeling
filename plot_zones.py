@@ -14,14 +14,16 @@ for zz, zone_coords in enumerate(zones):
 
 SIZE = 2
 
-with h5py.File('precomputed_layouts.h5', 'r') as f:
+with h5py.File('re_precomputed_layouts.h5', 'r') as f:
    for key in f.keys():
        if 'farm' not in key: continue
        farm = int(key.split('_')[0].strip('farm'))
        seed = int(key.split('_')[2].strip('s'))
+       turbine = int(key.split('_')[1][1])
        if farm == 0 and seed > 0: continue
        x, y = f[key]['layout']
-       if farm == 0 and seed == 0:
+       #if turbine != 5: continue
+       if farm == 0 and seed == 0 and turbine == 5:
            plt.scatter(x, y, c='k', alpha=1, s=SIZE)
        else:
            plt.scatter(x, y, c='k', alpha=0.003, s=SIZE)
