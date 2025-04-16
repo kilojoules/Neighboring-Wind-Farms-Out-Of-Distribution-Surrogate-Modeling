@@ -94,7 +94,7 @@ def evaluate_sample(sample_no, output_dir, n_points=18, random_pct=50):
         nwt = 1000 // int(turbid + 10)
         nwt_list.append(nwt)
         
-        neighbor_layout = get_layout_from_h5(farm_idx=n, type_idx=int(turbid), seed=seed)
+        neighbor_layout = get_layout_from_h5(farm_idx=(n + 1), type_idx=int(turbid), seed=seed)
         x_neighbours.append(list(neighbor_layout[0]))
         y_neighbours.append(list(neighbor_layout[1]))
         assert(neighbor_layout[0].size == nwt) # todo: wrong size atm
@@ -123,8 +123,11 @@ def evaluate_sample(sample_no, output_dir, n_points=18, random_pct=50):
             active_farms = sequence[:m]
             x = np.asarray(x_target)
             y = np.asarray(y_target)
-            types_active = (5 * np.ones(66)).astype(int)  # Target farm type
-            types_active_no_wake = (6 * np.ones(66)).astype(int)  # No-wake reference
+            types_active = [5] * y_target.size
+            #for kk in range(len(nwt_list)):
+            #   types_active.extend([(sample_data.rated_power - 10).values[kk]] * nwt_list[kk])
+            #types_active = (5 * np.ones(66)).astype(int)  # Target farm type
+            types_active_no_wake = (6 * np.ones(x_target.size)).astype(int)  # No-wake reference
             
             # Add active farms to layout
             for af in active_farms:
@@ -138,7 +141,8 @@ def evaluate_sample(sample_no, output_dir, n_points=18, random_pct=50):
                     types_active_no_wake, 
                     (rated_powers[af]-10) * np.ones(nwt_list[af])
                 ])
-# Run wake simulation
+
+            # Run "full wake" simulation
             if not os.path.exists(wake_path):
                 sim_res = wf_model(
                     x, y,

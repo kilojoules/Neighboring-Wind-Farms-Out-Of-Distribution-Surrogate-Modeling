@@ -19,7 +19,7 @@ def generate_samples(n_samples, n_farms=9, dist_flag='uniform', lambda_years=2, 
     rated_power = np.random.randint(10, 16, (n_samples, n_farms))  # MW
     rotor_diameter = 240 * np.sqrt(rated_power / 15)
     hub_height = rotor_diameter / 240 * 150
-    ss_seed = np.random.randint(1, 100, (n_samples, n_farms))
+    ss_seed = np.random.randint(1, 50, (n_samples, n_farms))
     # Construction day sampling
     if dist_flag == 'uniform':
         construction_day = np.random.uniform(0, 3653, (n_samples, n_farms)).astype(int)  # 10 years in days
