@@ -43,7 +43,7 @@ def evaluate_sample(sample_no, output_dir, n_points=18, random_pct=50):
     """Evaluate a single sample configuration."""
     
     # Load sample data and time series
-    samples = xr.load_dataset('samples.nc')
+    samples = xr.load_dataset(args.input)
     ts = pd.read_csv('energy_island_10y_daily_av_wind.csv', sep=';', parse_dates=True)
     
     # Setup simple uniform site with TI=0.1
@@ -179,6 +179,7 @@ if __name__ == "__main__":
     parser.add_argument("--start", type=int, required=True, help="Starting sample number")
     parser.add_argument("--end", type=int, required=True, help="Ending sample number")
     parser.add_argument("--output", type=str, default="results", help="Output directory")
+    parser.add_argument("--input", type=str, default="samples.nc", help="samples netcdf file")
     
     args = parser.parse_args()
     
