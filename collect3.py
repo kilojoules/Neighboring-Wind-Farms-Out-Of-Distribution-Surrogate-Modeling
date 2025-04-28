@@ -55,7 +55,7 @@ def find_progress(result_dir, total_samples, files_per_sample):
 
     for sample_id in sorted(all_found_ids):
          count = sample_counts[sample_id]
-         if count == files_per_sample:
+         if count >= files_per_sample - 1:
              completed_ids.append(sample_id)
          else:
              incomplete_info.append((sample_id, count))
@@ -112,6 +112,35 @@ def print_progress_report(progress, total_samples, files_per_sample):
 
 
     print("=" * 50)
+
+def delete_incomplete_files(incomplete_list, result_dir):
+    deleted_files_count = 0
+    deleted_samples_count = 0
+    print(f"Scanning for files to delete in: {result_dir}")
+
+    for sample_id, file_count in incomplete_list:
+        # Construct the file pattern for this incomplete sample ID
+        file_pattern = os.path.join(result_dir, f"res_{sample_id}_*.nc")
+        # Find all files matching the pattern
+        files_to_delete = glob.glob(file_pattern)
+
+        if not files_to_delete:
+            print(f"  - Sample {sample_id}: No files found matching pattern (unexpected). Skipping.")
+            continue
+
+        print(f"  - Sample {sample_id}: Found {len(files_to_delete)} files to delete.")
+        deleted_samples_count += 1
+        for filepath in files_to_delete:
+            try:
+                os.remove(filepath)
+                # print(f"    Deleted: {os.path.basename(filepath)}") # Uncomment for verbose output
+                deleted_files_count += 1
+            except OSError as e:
+                print(f"    ERROR deleting {os.path.basename(filepath)}: {e}")
+
+    print(f"\nDeletion Summary:")
+    print(f"  - Attempted to delete files for {deleted_samples_count} incomplete samples.")
+    print(f"  - Successfully deleted {deleted_files_count} files.")
 
 
 def concatenate_to_hdf5(completed_ids, result_dir, output_hdf5_file, files_per_sample):
@@ -186,7 +215,7 @@ def concatenate_to_hdf5(completed_ids, result_dir, output_hdf5_file, files_per_s
                 sample_file_pattern = os.path.join(result_dir, f"res_{sample_id}_*.nc")
                 sample_files = sorted(glob.glob(sample_file_pattern))
 
-                if len(sample_files) != files_per_sample:
+                if len(sample_files) < files_per_sample - 1:
                     print(f"WARNING: Sample {sample_id}: Expected {files_per_sample} files, found {len(sample_files)}. Skipping.")
                     continue
 
@@ -250,6 +279,22 @@ def main():
 
     # 2. Print Report
     print_progress_report(progress_data, TOTAL_SAMPLES, FILES_PER_SAMPLE)
+
+    # (Inside main function, after print_progress_report)
+    if progress_data['incomplete']:
+        print(f"\nWARNING: Found {progress_data['total_incomplete']} incomplete samples.")
+        try:
+            # Use input() to ask for confirmation
+            confirm = input("Do you want to delete all .nc files for these incomplete samples? (yes/no): ").lower()
+        except EOFError:
+            confirm = 'no' # Default to no if input is redirected
+    
+        if confirm == 'yes':
+            print("Proceeding with deletion...")
+            # Call a new function or add logic here to delete
+            delete_incomplete_files(progress_data['incomplete'], RESULT_DIR)
+        else:
+            print("Deletion skipped.")
 
     # 3. Ask to Concatenate
     if progress_data['completed']:
