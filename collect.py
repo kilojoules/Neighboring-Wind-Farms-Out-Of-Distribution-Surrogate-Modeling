@@ -76,6 +76,60 @@ def print_report(progress):
     
     print("=" * 50)
 
+
+import h5py
+import sys
+import os
+import glob
+import xarray as xr
+import numpy as np
+
+def concatenate_all_samples_hdf5(completed_samples, output_file):
+    """Concatenate all completed samples into a single HDF5 file."""
+    if not completed_samples:
+        print("No completed samples to concatenate.")
+        return False
+
+    try:
+        with h5py.File(output_file, 'w') as hf:
+            for i, sample_id in enumerate(completed_samples):
+                if i % 100 == 0:
+                    print(f"Processing sample {i+1}/{len(completed_samples)}")
+
+                sample_files = sorted(glob.glob(os.path.join(RESULT_DIR, f"res_{sample_id}_*.nc")))
+
+                if len(sample_files) != FILES_PER_SAMPLE:
+                    print(f"Warning: Sample {sample_id} has {len(sample_files)} files, expected {FILES_PER_SAMPLE}")
+                    continue
+
+                try:
+                    sample_datasets = [xr.open_dataset(f) for f in sample_files]
+                    sample_concat = xr.concat(sample_datasets, dim="time")
+
+                    # Store data in HDF5
+                    for var_name, data_array in sample_concat.data_vars.items():
+                        if var_name not in hf:
+                            # Create dataset if it doesn't exist
+                            hf.create_dataset(var_name, shape=(len(completed_samples), len(sample_concat.time), *data_array.shape[1:]), dtype=data_array.dtype)
+                        hf[var_name][i, :, ...] = data_array.values
+
+                    # Store sample_id as metadata
+                    hf.attrs[f"sample_id_{i}"] = sample_id
+
+                    for ds in sample_datasets:
+                        ds.close()
+
+                except Exception as e:
+                    print(f"Error processing sample {sample_id}: {str(e)}")
+                    continue
+
+        print(f"Successfully concatenated {len(completed_samples)} samples into {output_file}")
+        return True
+
+    except Exception as e:
+        print(f"Error concatenating samples: {str(e)}")
+        return False
+
 def concatenate_all_samples(completed_samples):
     """Concatenate all completed samples into a single NetCDF file."""
     if not completed_samples:
@@ -166,7 +220,7 @@ def monitor(interval=300):
                 else:
                     print("\nCreating initial concatenated file...")
                 
-                success = concatenate_all_samples(progress['completed'])
+                success = concatenate_all_samples_hdf5(progress['completed'])
                 if success:
                     last_concat_count = progress['total_completed']
             
@@ -189,7 +243,7 @@ def main():
         if progress['completed']:
             response = input(f"Concatenate {len(progress['completed'])} completed samples? (y/n): ")
             if response.lower() in ('y', 'yes'):
-                concatenate_all_samples(progress['completed'])
+                concatenate_all_samples_hdf5(progress['completed'])
     else:
         # Monitor continuously
         interval = 300
