@@ -4,7 +4,7 @@ import numpy as np
 import os
 from sklearn.model_selection import train_test_split
 
-# --- Function to load data from the H5 file (as developed in our conversation) ---
+# --- Function to load data from the H5 file ---
 def load_data_from_h5_by_sample(h5_filepath):
     """
     Loads data from an H5 file structured with '/sample_XXXX' groups,
@@ -14,16 +14,12 @@ def load_data_from_h5_by_sample(h5_filepath):
     all_sample_datasets = []
     
     with h5py.File(h5_filepath, 'r') as f:
-        # Get all top-level groups that look like 'sample_XXXX'
         sample_groups_names = [name for name in f.keys() if name.startswith('sample_')]
-        
-        # Sort by sample number to ensure consistent order
         sample_numbers = []
         for name in sample_groups_names:
             try:
                 sample_numbers.append(int(name.split('_')[1]))
             except ValueError:
-                # Skip if name is not in expected 'sample_XXXX' format
                 continue
         sample_numbers.sort()
 
@@ -56,22 +52,21 @@ def load_data_from_h5_by_sample(h5_filepath):
 
 
                     power_da = xr.DataArray(
-                        power_data_farm0, # Now this is 1D
+                        power_data_farm0,
                         coords={'time': time_coords},
-                        dims=['time'] # Dims is now correctly ['time']
+                        dims=['time']
                     )
 
-                    # Create a temporary dataset for this sample
                     sample_ds = xr.Dataset(
                         {'Power': power_da},
-                        coords={'sample': sample_num} # Only sample coordinate needed for Power
+                        coords={'sample': sample_num}
                     )
                     all_sample_datasets.append(sample_ds)
 
                 except Exception as e:
                     print(f"Error processing group {group_name}: {e}")
                     print(f"Available keys in {group_name} during error: {list(sample_group.keys())}")
-                    continue # Skip this problematic sample
+                    continue
 
             else:
                 print(f"Warning: Group {group_name} not found in H5 file. This should not happen if iterating from keys.")
@@ -79,7 +74,6 @@ def load_data_from_h5_by_sample(h5_filepath):
     if not all_sample_datasets:
         raise ValueError("No valid sample data found in the H5 file after filtering.")
 
-    # Concatenate all individual sample datasets along a new 'sample' dimension
     concatenated_ds = xr.concat(all_sample_datasets, dim='sample')
 
     return concatenated_ds
@@ -130,18 +124,17 @@ def calculate_revenue(power_data, discount_rate=0.03):
 # --- Main preprocessing script logic ---
 if __name__ == "__main__":
     # --- Configuration ---
-    # This variable can be adjusted to switch between different results directories
+    # Adjust this variable for each run to process different data sets
     # e.g., "uniform_results", "exponential_1yr_results", "exponential_2yr_results"
-    RESULTS_SUBDIR = "exponential_1yr_results" 
+    RESULTS_SUBDIR = "exponential_1yr_results" # Set this for the current run
 
     H5_RESULTS_FILE = os.path.join(f'./{RESULTS_SUBDIR}/concatenated/', 'all_samples.h5')
     
-    # Corrected path for ORIGINAL_SAMPLES_FILE based on your 'ls *.nc' output
-    # Assumes files like 'exponential_1yr_samples.nc' are in the current working directory
-    BASE_SAMPLE_FILENAME = RESULTS_SUBDIR.replace('_results', '_samples') # e.g., "exponential_1yr_samples"
-    ORIGINAL_SAMPLES_FILE = f'./{BASE_SAMPLE_FILENAME}.nc' # Directly in working directory
+    BASE_SAMPLE_FILENAME = RESULTS_SUBDIR.replace('_results', '_samples') 
+    ORIGINAL_SAMPLES_FILE = f'./{BASE_SAMPLE_FILENAME}.nc' 
 
-    OUTPUT_DIR = './preprocessed_data/'
+    # --- IMPORTANT: Standardized output directory for XGBoost script ---
+    OUTPUT_DIR = './preprocessed_data/' 
     os.makedirs(OUTPUT_DIR, exist_ok=True)
 
     # --- 1. Load Power time series from H5 file ---
@@ -165,7 +158,6 @@ if __name__ == "__main__":
         print(f"Failed to load original features from {ORIGINAL_SAMPLES_FILE}: {e}")
         exit()
 
-    # --- CORRECTED: Removed 'nwt' and 'type' as they are not in the .nc file ---
     features_to_extract = [
         'rated_power', 'rotor_diameter', 'hub_height', 'construction_day',
         'ss_seed'
@@ -200,15 +192,37 @@ if __name__ == "__main__":
     y_1yr = revenues_ds['first_year_revenue'].to_numpy()
     y_total = revenues_ds['total_revenue'].to_numpy()
 
-    X_train_val, X_test, y_1yr_train_val, y_1yr_test, y_total_train_val, y_total_test = \
-        train_test_split(X_data, y_1yr, y_total, test_size=0.2, random_state=42)
+    # --- Split data and save to .npz based on RESULTS_SUBDIR ---
+    # This section needs to be run multiple times, once for each RESULTS_SUBDIR.
+    # The 'train.npz' and 'valid.npz' should ideally be generated from one main dataset
+    # (e.g., exponential_1yr_results or a combined training set).
+    # Then, subsequent runs for other RESULTS_SUBDIRs generate the specific test sets.
 
-    X_train, X_val, y_1yr_train, y_1yr_val, y_total_train, y_total_val = \
-        train_test_split(X_train_val, y_1yr_train_val, y_total_train_val, test_size=0.25, random_state=42)
+    if RESULTS_SUBDIR == "exponential_1yr_results":
+        # This run can be used to generate the main train/validation/test split
+        X_train_val, X_test, y_1yr_train_val, y_1yr_test, y_total_train_val, y_total_test = \
+            train_test_split(X_data, y_1yr, y_total, test_size=0.2, random_state=42)
 
-    np.savez(os.path.join(OUTPUT_DIR, 'train.npz'), X=X_train, y_revenue_1yr_0_1=y_1yr_train, y_revenue_10yr_0_1=y_total_train)
-    np.savez(os.path.join(OUTPUT_DIR, 'valid.npz'), X=X_val, y_revenue_1yr_0_1=y_1yr_val, y_revenue_10yr_0_1=y_total_val)
-    np.savez(os.path.join(OUTPUT_DIR, 'test_all_samples.npz'), X=X_test, y_revenue_1yr_0_1=y_1yr_test, y_revenue_10yr_0_1=y_total_test)
+        X_train, X_val, y_1yr_train, y_1yr_val, y_total_train, y_total_val = \
+            train_test_split(X_train_val, y_1yr_train_val, y_total_train_val, test_size=0.25, random_state=42)
+
+        np.savez(os.path.join(OUTPUT_DIR, 'train.npz'), X=X_train, y_revenue_1yr_0_1=y_1yr_train, y_revenue_10yr_0_1=y_total_train)
+        np.savez(os.path.join(OUTPUT_DIR, 'valid.npz'), X=X_val, y_revenue_1yr_0_1=y_1yr_val, y_revenue_10yr_0_1=y_total_val)
+        
+        # Save a test file specific to this result subdir
+        np.savez(os.path.join(OUTPUT_DIR, 'test_exp1.npz'), X=X_test, y_revenue_1yr_0_1=y_1yr_test, y_revenue_10yr_0_1=y_total_test)
+
+    elif RESULTS_SUBDIR == "uniform_results":
+        # All data from this run becomes the 'test_uniform' set
+        np.savez(os.path.join(OUTPUT_DIR, 'test_uniform.npz'), X=X_data, y_revenue_1yr_0_1=y_1yr, y_revenue_10yr_0_1=y_total)
+
+    elif RESULTS_SUBDIR == "exponential_2yr_results":
+        # All data from this run becomes the 'test_exp2' set
+        np.savez(os.path.join(OUTPUT_DIR, 'test_exp2.npz'), X=X_data, y_revenue_1yr_0_1=y_1yr, y_revenue_10yr_0_1=y_total)
+
+    else:
+        print(f"Warning: No specific saving logic for RESULTS_SUBDIR: {RESULTS_SUBDIR}. Saving as 'test_all_samples.npz'.")
+        np.savez(os.path.join(OUTPUT_DIR, 'test_all_samples.npz'), X=X_data, y_revenue_1yr_0_1=y_1yr, y_revenue_10yr_0_1=y_total)
 
     print(f"Processed data saved to {OUTPUT_DIR}")
     print("Preprocessing complete!")
