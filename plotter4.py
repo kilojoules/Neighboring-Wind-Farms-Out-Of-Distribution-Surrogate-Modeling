@@ -458,7 +458,8 @@ if __name__ == "__main__":
             ax.legend(handles=handles_for_legend, labels=labels_for_legend, loc='best')
         
         plt.title(f"{rolling_window_days}-Day Rolling Avg Power & PyWake Baseline Simulation", fontsize=16)
-        plt.xlabel('Time (Days from start of common period)', fontsize=12)
+        plt.xlabel('Time (years)', fontsize=12)
+        #plt.xlabel('Time (Days from start of common period)', fontsize=12)
         plt.ylabel(f'Power (W)', fontsize=12)
         ax.tick_params(axis='both', which='major', labelsize=10)
         plt.grid(True, which='both', linestyle='--', linewidth=0.5)
