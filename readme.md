@@ -1,13 +1,115 @@
-welcome to the repo!
+# Surrogate Modeling for Neighboring Wind Farms
 
-FILE                         PURPOSE
-++++                         +++++++
-run.sh                       run data generation scripts
+This project focuses on developing and evaluating surrogate models to predict the power output of a central wind farm, considering the complex and time-varying wake effects from surrounding neighbor farms. The workflow is designed to generate a large-scale, high-fidelity dataset using the PyWake simulation tool, and then use this data to train and optimize machine learning models (Feed-Forward Neural Networks and XGBoost) for fast and accurate power prediction. A key aspect is the analysis of model performance under out-of-distribution (OOD) conditions, where neighbor farms are built according to different temporal distributions.
 
-- generate_samps.py            generate wind farm simulation samples given input distributions
-- precompute_farm_layouts.py   precompute a database of smart start optimization results
-- evaluate_sample.py & evaluate_samples.py: These are the core simulation scripts. evaluate_sample.py processes a single sample , while evaluate_samples.py processes a range of samples by calling it repeatedl
-- collect.py: This script monitors the output directories from the simulation st
-- preprocess.py: This script converts the raw, time-series simulation data into a feature matrix (X) and a target vector (Y).
-- normalize_all_datasets.py: This script standardizes the features and target variable.
-- data_manager.py: This script creates the final data splits for modeling. 
+The project is structured as a pipeline, encompassing initial data generation, large-scale simulation, data processing, model training, and results analysis.
+
+## Project Workflow
+
+The project follows a sequential workflow, where the output of one stage serves as the input for the next.
+
+1.  **Setup & Pre-computation**: Generate the foundational data for the study. This includes defining the uncertain input parameters for each simulation run and pre-calculating optimized layouts for various wind farm configurations.
+2.  **Simulation Execution**: Run thousands of high-fidelity PyWake simulations on a high-performance computing (HPC) cluster. Each simulation models a unique scenario with different neighbor farm build-out schedules and turbine types.
+3.  **Data Processing & Aggregation**: Process the raw simulation outputs (`.nc` files)[cite: 875, 876]. [cite_start]This involves checking for completed simulations [cite: 785, 786][cite_start], calculating target metrics (e.g., mean power), and consolidating the results with their corresponding input features into structured CSV files.
+4.  **Normalization & Data Splitting**: Normalize the aggregated datasets using globally consistent scaling parameters to prepare them for machine learning. Then, split the normalized data into formal training, validation, and out-of-distribution (OOD) test sets.
+5.  **Model Training & Hyperparameter Optimization**: Use the prepared datasets to train surrogate models. This stage involves extensive hyperparameter tuning using Optuna to find the best-performing model architectures and training configurations.
+6.  **Analysis & Visualization**: Analyze the model performance, especially concerning OOD generalization. Visualize the raw simulation data and model prediction trends to gain insights.
+
+---
+
+## Script Descriptions
+
+The project is composed of several scripts, each with a specific role in the workflow. They are presented here in their logical order of execution.
+
+### 1. Setup & Pre-computation
+
+These scripts generate the necessary inputs for the main simulations.
+
+* `generate_samps.py`
+    * **Purpose**: Creates the initial set of uncertain input parameters for the entire study. It generates samples for the rated power, construction day, and smart-start optimization seed for each of the 9 neighbor farms.
+    * **Inputs**: Command-line arguments to specify the number of samples, the output file name, and the distribution for construction day sampling ('uniform' or 'exponential').
+    * **Outputs**: A NetCDF file (e.g., `uniform_samples.nc`, `exponential_1yr_samples.nc`) containing the input parameters for all simulation samples.
+
+* `precompute_farm_layouts.py`
+    * **Purpose**: Runs a large number of wind farm layout optimizations using TopFarm. It pre-computes and stores optimized turbine layouts for different farm sites and turbine types. This creates a database of layouts that can be quickly looked up during the main simulation phase, avoiding the need to run costly optimizations repeatedly.
+    * **Inputs**: Command-line arguments for the number of random seeds, number of parallel processes, and the output file name. Farm boundaries are loaded from a helper function.
+    * **Outputs**: A single HDF5 file (e.g., `re_precomputed_layouts.h5`) containing the optimized x, y coordinates and resulting AEP for each configuration. It supports hot-starting by scanning for existing results to avoid re-running completed optimizations.
+
+### 2. Simulation Execution
+
+These scripts run the core PyWake simulations based on the pre-computed inputs.
+
+* `evaluate_sample.py` / `evaluate_samples.py`
+    * **Purpose**: The main simulation engine. For each sample, it loads the input parameters from the `.nc` file (generated by `generate_samps.py`) and the corresponding pre-computed layouts from the HDF5 file. It then runs a time-series simulation using the `Nygaard_2022` wake model, considering the staged construction of neighbor farms. It generates separate outputs for "full wake" and "no-wake" (external wake only) scenarios.
+    * **Inputs**: A sample number (or a start/end range), an output directory, and the path to the input samples file. It also reads a time-series wind data CSV.
+    * **Outputs**: A series of NetCDF files (e.g., `res_{sample_no}_{m}.nc`) for each time chunk of each sample, stored in `wake/` and `no_wake/` subdirectories.
+
+* **Execution Scripts (`runall.sh`, `missing.sh`, etc.)**
+    * **Purpose**: These are shell scripts designed to parallelize the execution of `evaluate_samples.py` on a SLURM-based HPC cluster. They divide the total number of samples among an array of cluster jobs.
+    * **Scripts**:
+        * `runall.sh`: Runs a large batch of samples, dividing the workload across tasks.
+        * `missing.sh` / `missing_short.sh`: Specifically designed to re-run simulations for samples that failed or were missed in the main run, based on a list of missing cases.
+
+### 3. Data Processing & Preparation for Modeling
+
+These scripts gather the raw simulation results and transform them into a format suitable for machine learning.
+
+* `preprocess3.py`
+    * **Purpose**: This script acts as the primary data aggregation and feature engineering tool. It first identifies all successfully completed simulation samples by checking for the expected number of output files. For each completed sample, it loads the corresponding input features from the original samples file (e.g., `uniform_samples.nc`) and calculates the target values (mean power over time) from the raw simulation output (`res_..._.nc`) files.
+    * **Inputs**: The script is configured to scan specific result directories (e.g., `uniform_results/`).
+    * **Outputs**: A single, aggregated CSV file for each data distribution (e.g., `uniform_xy_data.csv`), containing all input features and the calculated target variables for each sample. It also generates a `missing_cases_{dist_id}.dat` file for failed/incomplete samples.
+
+* `normalize_all_datasets.py`
+    * **Purpose**: Applies Min-Max scaling to the feature columns and normalizes the target column by the farm's rated capacity. Crucially, it uses a set of predefined, **global bounds** for scaling features, ensuring that data from different distributions (e.g., uniform, exponential) are transformed into a consistent, comparable range.
+    * **Inputs**: The aggregated CSV files produced by `preprocess3.py`.
+    * **Outputs**: Normalized CSV files (e.g., `uniform_xy_data_normalized_global.csv`) and a JSON file (`global_normalization_params.json`) that stores the exact bounds and capacity value used for the transformation.
+
+* `data_manager.py`
+    * **Purpose**: The final step in data preparation. This script loads the globally normalized CSV files and creates formal, version-controlled data splits for modeling. It separates the data into training, validation, and out-of-distribution (OOD) test sets.
+    * **Inputs**: A source distribution name for training/validation (e.g., `Exp_1yr`) and a list of OOD distributions.
+    * **Outputs**: A set of `.npz` files containing the data splits (e.g., `train_data_from_Exp_1yr.npz`, `ood_test_Uniform.npz`) and a detailed metadata JSON file that documents the splits, the source files, feature columns, and command-line arguments used.
+
+### 4. Model Training & Optimization
+
+These scripts use the prepared `.npz` data files to train and tune surrogate models.
+
+* `nn_train.py`
+    * **Purpose**: Performs a comprehensive hyperparameter search for a Feed-Forward Neural Network (FFNN) surrogate model using the Optuna framework. It explores different architectures (number of layers, neuron counts), learning rates, and dropout rates. The best model is determined via K-Fold cross-validation.
+    * **Inputs**: Paths to the training and validation `.npz` files generated by `data_manager.py`.
+    * [cite_start]**Outputs**: The trained best model state (`best_nn_model.pt`) [cite: 698][cite_start], a detailed JSON file with all hyperparameters and final evaluation metrics (`hyperparams_and_metadata.json`), and a series of diagnostic plots from Optuna.
+
+* `optimize_xgboost_hyperparameters.py`
+    * **Purpose**: Similar to `nn_train.py`, this script uses Optuna to find the optimal hyperparameters for an XGBoost regression model. It performs a search over parameters like `n_estimators`, `learning_rate`, and `max_depth` using K-Fold cross-validation.
+    * **Inputs**: The name of the normalized dataset to use (e.g., `Uniform`).
+    * [cite_start]**Outputs**: A JSON file containing the best hyperparameters and evaluation metrics, along with Optuna visualization plots.
+
+### 5. Analysis & Visualization
+
+These scripts are used to analyze and plot the data and model results.
+
+* `plotter4.py`
+    * **Purpose**: A detailed visualization script to analyze the raw simulation results. It loads the time-series power data for a selection of samples from the `wake/` and `no_wake/` directories, calculates a rolling average, and plots it. Crucially, it also runs a new PyWake simulation for an isolated baseline farm and overlays this with the full-loss and external-loss curves to visually separate the impact of internal vs. external wake effects.
+    * **Inputs**: Configuration of result directories, sample IDs to plot, and PyWake baseline parameters.
+    * **Outputs**: A PNG image (`powers_comparison_with_pywake_sim_integrated.png`) comparing the various power time-series.
+
+* `generate_nn_ood_trend_plots.py`
+    * **Purpose**: Analyzes the relationship between neural network architecture and out-of-distribution (OOD) performance. It systematically trains a series of models with varying architectures (e.g., different numbers of layers and neurons) while keeping other hyperparameters fixed. It then evaluates each model on both in-distribution and OOD test sets.
+    * **Inputs**: The `.npz` data splits from `data_manager.py`. It requires user-defined fixed hyperparameters based on a previous Optuna run.
+    * **Outputs**: A summary CSV of all architecture results and a series of plots showing OOD RMSE as a function of model size and architecture type, as well as comparing ID vs. OOD performance.
+
+* `quick_assessment.py`
+    * **Purpose**: Performs a quick exploratory analysis using Sliced Inverse Regression (SIR) to find a low-dimensional projection of the input features that best explains the variance in the target variable. This is useful for an initial check of data quality and feature relevance.
+    * **Inputs**: An aggregated data CSV from `preprocess3.py`.
+    * **Outputs**: Scatter plots showing the relationship between the projected features and the target.
+
+* `plot_zones.py`
+    * **Purpose**: Generates a plot showing the geographical boundaries of all 10 wind farm zones. It can also overlay the optimized turbine layouts from the HDF5 file to visualize their placement within the zones.
+    * **Inputs**: The pre-computed layouts HDF5 file.
+    * **Outputs**: A saved plot named `zones_updated`.
+
+### 6. Utility & Monitoring Scripts
+
+* `monitor.py`
+    * [cite_start]**Purpose**: A utility for monitoring the progress of the `precompute_farm_layouts.py` script. [cite_start]It can safely read the output HDF5 file while it is being written to, providing a real-time progress summary, file structure details, and counts of completed configurations.
+    * **Inputs**: The path to the HDF5 file being generated.
+    * **Outputs**: A formatted progress table printed to the console.
