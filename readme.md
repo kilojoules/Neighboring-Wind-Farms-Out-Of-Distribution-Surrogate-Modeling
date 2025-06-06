@@ -4,9 +4,10 @@ FILE                         PURPOSE
 ++++                         +++++++
 run.sh                       run data generation scripts
 
-generate_samps.py            generate wind farm simulation samples given input distributions
-precompute_farm_layouts.py   precompute a database of smart start optimization results
-preprocess_evaluations.py    compute 1 or 10 year revenue (with constant electricity price), normalize inputs/outputs
-
-xgbs.sh                      run xgboost sweep for several assumptions (discount rate, 1 versus 10 years revenue)
-xgboost_sweep.py             xgboost sweep with hyperparameter grid definition
+- generate_samps.py            generate wind farm simulation samples given input distributions
+- precompute_farm_layouts.py   precompute a database of smart start optimization results
+- evaluate_sample.py & evaluate_samples.py: These are the core simulation scripts. evaluate_sample.py processes a single sample , while evaluate_samples.py processes a range of samples by calling it repeatedl
+- collect.py: This script monitors the output directories from the simulation st
+- preprocess.py: This script converts the raw, time-series simulation data into a feature matrix (X) and a target vector (Y).
+- normalize_all_datasets.py: This script standardizes the features and target variable.
+- data_manager.py: This script creates the final data splits for modeling. 

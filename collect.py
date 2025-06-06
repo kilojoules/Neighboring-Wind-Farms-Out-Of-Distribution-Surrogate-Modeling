@@ -5,255 +5,324 @@ import glob
 import sys
 import time
 from collections import defaultdict
+import h5py
+import xarray as xr
+import numpy as np
 
-# Configuration
-RESULT_DIR = "/work/users/juqu/Neighboring-Wind-Farms-Out-Of-Distribution-Surrogate-Modeling/results/wake"
-OUTPUT_DIR = "/work/users/juqu/Neighboring-Wind-Farms-Out-Of-Distribution-Surrogate-Modeling/results/concatenated"
-FINAL_OUTPUT = os.path.join(OUTPUT_DIR, "all_samples.nc")
+# --- Configuration ---
+THIS_YR = int(sys.argv[1])
+THIS_NAME = f'exponential_{THIS_YR}yr_results'
+RESULT_DIR = f"/work/users/juqu/Neighboring-Wind-Farms-Out-Of-Distribution-Surrogate-Modeling/{THIS_NAME}/wake"
+OUTPUT_DIR = f"/work/users/juqu/Neighboring-Wind-Farms-Out-Of-Distribution-Surrogate-Modeling/{THIS_NAME}/concatenated"
+FINAL_OUTPUT = os.path.join(OUTPUT_DIR, "all_samples.h5")  # HDF5 output
 TOTAL_SAMPLES = 5000
 FILES_PER_SAMPLE = 10
+# --- End Configuration ---
 
-def check_progress():
-    """Check progress of sample processing and return completed samples."""
-    # Get all result files
-    all_files = glob.glob(os.path.join(RESULT_DIR, "res_*_*.nc"))
-    
-    # Count files per sample
+def find_progress(result_dir, total_samples, files_per_sample):
+    """
+    Scans the result directory to find completed, incomplete, and missing samples.
+    """
+    print(f"DEBUG: Scanning directory: {result_dir}")
+    all_files = glob.glob(os.path.join(result_dir, "res_*_*.nc"))
+    print(f"DEBUG: Found {len(all_files)} total .nc files.")
+
     sample_counts = defaultdict(int)
+    processed_files = 0
+    skipped_files = 0
     for f in all_files:
         basename = os.path.basename(f)
-        try:
-            # Extract sample ID
-            sample_id = int(basename.split('_')[1])
-            sample_counts[sample_id] += 1
-        except:
-            continue
-    
-    # Track completed and incomplete samples
-    completed = []
-    incomplete = []
-    for sample_id, count in sample_counts.items():
-        if count == FILES_PER_SAMPLE:
-            completed.append(sample_id)
+        parts = basename.split('_')
+        # Expected format: res_{sample_id}_{anything_else}.nc
+        if len(parts) >= 3 and parts[0] == 'res' and parts[1].isdigit():
+            try:
+                sample_id = int(parts[1])
+                sample_counts[sample_id] += 1
+                processed_files += 1
+            except ValueError:
+                print(f"DEBUG: Skipping file with non-integer sample ID: {basename}")
+                skipped_files += 1
         else:
-            incomplete.append((sample_id, count))
-    
-    completed.sort()
-    incomplete.sort()
-    
-    return {
-        "completed": completed,
-        "incomplete": incomplete,
-        "total_completed": len(completed),
-        "total_incomplete": len(incomplete),
-        "total_missing": TOTAL_SAMPLES - len(sample_counts),
-        "percent_complete": (len(completed) / TOTAL_SAMPLES) * 100
-    }
+            print(f"DEBUG: Skipping file with unexpected name format: {basename}")
+            skipped_files += 1
 
-def print_report(progress):
-    """Print a progress report."""
+    print(f"DEBUG: Parsed {processed_files} files, skipped {skipped_files} files.")
+
+    completed_ids = []
+    incomplete_info = []
+    all_found_ids = set(sample_counts.keys())
+
+    # Use range starting from 1 up to TOTAL_SAMPLES + 1 for sample IDs
+    expected_ids = set(range(1, total_samples + 1))
+
+    for sample_id in sorted(all_found_ids):
+         count = sample_counts[sample_id]
+         if count >= files_per_sample - 2:
+             completed_ids.append(sample_id)
+         else:
+             incomplete_info.append((sample_id, count))
+
+    missing_ids = sorted(list(expected_ids - all_found_ids))
+    outf = open(f'missing_cases_{THIS_NAME}.dat', 'w')
+    outf.write(' '.join([str(s) for s in missing_ids]))
+    outf.close()
+    # Ensure completed/incomplete lists are also sorted if needed (already are here)
+    # completed_ids.sort() # Already sorted if iterating through sorted keys
+    # incomplete_info.sort() # Already sorted if iterating through sorted keys
+
+    total_completed = len(completed_ids)
+    percent_complete = (total_completed / total_samples) * 100 if total_samples > 0 else 0
+
+    progress = {
+        "completed": completed_ids,
+        "incomplete": incomplete_info,
+        "missing": missing_ids,
+        "total_completed": total_completed,
+        "total_incomplete": len(incomplete_info),
+        "total_missing": len(missing_ids),
+        "percent_complete": percent_complete
+    }
+    print(f"DEBUG: Progress check complete. Found {total_completed} completed samples.")
+    return progress
+
+def print_progress_report(progress, total_samples, files_per_sample):
+    """Prints a formatted progress report."""
     print("\n" + "=" * 50)
     print(f"PROGRESS REPORT - {time.strftime('%Y-%m-%d %H:%M:%S')}")
     print("=" * 50)
-    print(f"Completed: {progress['total_completed']} / {TOTAL_SAMPLES} samples ({progress['percent_complete']:.1f}%)")
+    print(f"Target Samples: {total_samples}")
+    print(f"Files per Sample: {files_per_sample}")
+    print("-" * 50)
+    print(f"Completed: {progress['total_completed']} / {total_samples} samples ({progress['percent_complete']:.1f}%)")
     print(f"Incomplete: {progress['total_incomplete']} samples")
-    print(f"Missing: {progress['total_missing']} samples")
-    
-    # Show some completed samples
+    print(f"Missing: {progress['total_missing']} samples (expected IDs not found at all)")
+
     if progress['completed']:
         sample_str = str(progress['completed'][:10])
         if len(progress['completed']) > 10:
             sample_str = sample_str[:-1] + ", ...]"
-        print(f"\nCompleted samples: {sample_str}")
-    
-    # Show some incomplete samples
+        print(f"\nCompleted sample IDs: {sample_str}")
+
     if progress['incomplete']:
         print("\nIncomplete samples (sample_id, files_count):")
         for i, (sample_id, count) in enumerate(progress['incomplete'][:5]):
-            print(f"  Sample {sample_id}: {count}/{FILES_PER_SAMPLE} files")
+            print(f"  Sample {sample_id}: {count}/{files_per_sample} files")
         if len(progress['incomplete']) > 5:
             print(f"  ... and {len(progress['incomplete']) - 5} more")
-    
+
+    if progress['missing'] and len(progress['missing']) <= 10: # Only show missing if few
+         print(f"\nMissing sample IDs: {progress['missing']}")
+    elif progress['missing']:
+         print(f"\nMissing sample IDs: {progress['missing'][:5]} ... and {len(progress['missing'])-5} more")
+
+
     print("=" * 50)
 
+def delete_incomplete_files(incomplete_list, result_dir):
+    deleted_files_count = 0
+    deleted_samples_count = 0
+    print(f"Scanning for files to delete in: {result_dir}")
 
-import h5py
-import sys
-import os
-import glob
-import xarray as xr
-import numpy as np
+    for sample_id, file_count in incomplete_list:
+        # Construct the file pattern for this incomplete sample ID
+        file_pattern = os.path.join(result_dir, f"res_{sample_id}_*.nc")
+        # Find all files matching the pattern
+        files_to_delete = glob.glob(file_pattern)
 
-def concatenate_all_samples_hdf5(completed_samples, output_file):
-    """Concatenate all completed samples into a single HDF5 file."""
-    if not completed_samples:
-        print("No completed samples to concatenate.")
-        return False
+        if not files_to_delete:
+            print(f"  - Sample {sample_id}: No files found matching pattern (unexpected). Skipping.")
+            continue
 
+        print(f"  - Sample {sample_id}: Found {len(files_to_delete)} files to delete.")
+        deleted_samples_count += 1
+        for filepath in files_to_delete:
+            try:
+                os.remove(filepath)
+                # print(f"    Deleted: {os.path.basename(filepath)}") # Uncomment for verbose output
+                deleted_files_count += 1
+            except OSError as e:
+                print(f"    ERROR deleting {os.path.basename(filepath)}: {e}")
+
+    print(f"\nDeletion Summary:")
+    print(f"  - Attempted to delete files for {deleted_samples_count} incomplete samples.")
+    print(f"  - Successfully deleted {deleted_files_count} files.")
+
+
+def concatenate_to_hdf5(completed_ids, result_dir, output_hdf5_file, files_per_sample):
+    """
+    Concatenates completed samples into an HDF5 file using separate groups
+    for each sample to handle potentially varying dimensions.
+    """
+    print(f"\nDEBUG: Starting concatenation process for {len(completed_ids)} completed IDs.")
+    print(f"DEBUG: Output file target: {output_hdf5_file}")
+    print(f"DEBUG: Using separate HDF5 groups per sample.")
+
+    if not completed_ids:
+        print("No completed samples provided to concatenate.")
+        return
+
+    samples_to_process = []
+    existing_groups = set() # Store names of existing groups (e.g., 'sample_1')
+
+    if os.path.exists(output_hdf5_file):
+        print(f"DEBUG: Output file '{output_hdf5_file}' exists. Checking for existing sample groups (Hot Start).")
+        try:
+            with h5py.File(output_hdf5_file, 'r') as hf:
+                # List existing groups that look like sample groups
+                for name in hf:
+                    if isinstance(hf[name], h5py.Group) and name.startswith('sample_'):
+                         existing_groups.add(name)
+            print(f"DEBUG: Found {len(existing_groups)} existing sample groups in the HDF5 file.")
+        except OSError as e:
+             print(f"ERROR: Could not read existing HDF5 file '{output_hdf5_file}': {e}")
+             print("Suggestion: Delete the existing file and rerun to recreate it.")
+             return # Stop concatenation if file is unreadable
+
+        # Determine which samples actually need processing
+        samples_to_process = []
+        for sid in completed_ids:
+            group_name = f"sample_{sid}"
+            if group_name not in existing_groups:
+                samples_to_process.append(sid)
+
+        samples_to_process.sort() # Keep order consistent
+        print(f"DEBUG: Comparing {len(completed_ids)} completed IDs with {len(existing_groups)} existing groups.")
+        print(f"DEBUG: Found {len(samples_to_process)} new samples to add as groups.")
+
+    else:
+        print(f"DEBUG: Output file '{output_hdf5_file}' does not exist. Creating new file.")
+        samples_to_process = sorted(list(completed_ids)) # Process all completed if file is new
+
+    if not samples_to_process:
+        print("All completed samples are already present as groups in the HDF5 file. No new samples to add.")
+        return
+
+    print(f"DEBUG: Will process and add {len(samples_to_process)} samples as new groups.")
+
+    # Ensure output directory exists
+    os.makedirs(os.path.dirname(output_hdf5_file), exist_ok=True)
+
+    # Use a context manager for the HDF5 file, always open in append mode ('a')
+    # as 'w' would delete existing groups even if we only wanted to add new ones.
+    # If the file doesn't exist, 'a' will create it.
     try:
-        with h5py.File(output_file, 'w') as hf:
-            for i, sample_id in enumerate(completed_samples):
-                if i % 100 == 0:
-                    print(f"Processing sample {i+1}/{len(completed_samples)}")
+        with h5py.File(output_hdf5_file, 'a') as hf:
+            for i, sample_id in enumerate(samples_to_process):
+                group_name = f"sample_{sample_id}"
+                print(f"Processing sample {i+1}/{len(samples_to_process)} (ID: {sample_id}) -> Group: '{group_name}'")
 
-                sample_files = sorted(glob.glob(os.path.join(RESULT_DIR, f"res_{sample_id}_*.nc")))
-
-                if len(sample_files) != FILES_PER_SAMPLE:
-                    print(f"Warning: Sample {sample_id} has {len(sample_files)} files, expected {FILES_PER_SAMPLE}")
+                # Check if group somehow already exists (shouldn't based on logic above, but safe)
+                if group_name in hf:
+                    print(f"WARNING: Group '{group_name}' already exists. Skipping sample {sample_id}.")
                     continue
 
+                # Find files for this specific sample
+                sample_file_pattern = os.path.join(result_dir, f"res_{sample_id}_*.nc")
+                sample_files = sorted(glob.glob(sample_file_pattern))
+
+                if len(sample_files) < files_per_sample - 1:
+                    print(f"WARNING: Sample {sample_id}: Expected {files_per_sample} files, found {len(sample_files)}. Skipping.")
+                    continue
+
+                # Load and concatenate data for this single sample using xarray
                 try:
-                    sample_datasets = [xr.open_dataset(f) for f in sample_files]
-                    sample_concat = xr.concat(sample_datasets, dim="time")
-
-                    # Store data in HDF5
-                    for var_name, data_array in sample_concat.data_vars.items():
-                        if var_name not in hf:
-                            # Create dataset if it doesn't exist
-                            hf.create_dataset(var_name, shape=(len(completed_samples), len(sample_concat.time), *data_array.shape[1:]), dtype=data_array.dtype)
-                        hf[var_name][i, :, ...] = data_array.values
-
-                    # Store sample_id as metadata
-                    hf.attrs[f"sample_id_{i}"] = sample_id
-
-                    for ds in sample_datasets:
+                    datasets_for_sample = [xr.open_dataset(f) for f in sample_files]
+                    # Combine along time dimension
+                    sample_combined = xr.concat(datasets_for_sample, dim="time")
+                    # Close the individual files
+                    for ds in datasets_for_sample:
                         ds.close()
 
+                    # No need to add sample_id as coordinate or expand dims here,
+                    # the group name itself identifies the sample.
+
                 except Exception as e:
-                    print(f"Error processing sample {sample_id}: {str(e)}")
+                    print(f"ERROR: Failed to load or concatenate files for sample {sample_id}: {e}. Skipping.")
                     continue
 
-        print(f"Successfully concatenated {len(completed_samples)} samples into {output_file}")
-        return True
+                # --- Write data to a new group in HDF5 ---
+                try:
+                    sample_group = hf.create_group(group_name)
+                    print(f"DEBUG: Created group '{group_name}'")
+
+                    # Process data variables
+                    for var_name, data_array in sample_combined.data_vars.items():
+                        print(f"DEBUG: Writing variable '{var_name}' with shape {data_array.shape}")
+                        sample_group.create_dataset(var_name, data=data_array.values, chunks=True, compression="gzip") # Added compression
+
+                    # Process coordinates
+                    for coord_name, coord_array in sample_combined.coords.items():
+                         print(f"DEBUG: Writing coordinate '{coord_name}' with shape {coord_array.shape}")
+                         sample_group.create_dataset(coord_name, data=coord_array.values) # No need for chunks/maxshape here usually
+
+                except Exception as e:
+                    print(f"ERROR: Failed writing data to group '{group_name}' for sample {sample_id}: {e}")
+                    # Optional: Attempt to delete the potentially incomplete group?
+                    if group_name in hf:
+                         del hf[group_name]
+                         print(f"DEBUG: Removed potentially incomplete group '{group_name}'")
+                    continue # Skip to next sample
+
+        print(f"\nSuccessfully processed {len(samples_to_process)} samples into {output_hdf5_file}")
 
     except Exception as e:
-        print(f"Error concatenating samples: {str(e)}")
-        return False
+        # Catch broader errors during file operations or processing
+        print(f"\nAn unexpected error occurred during HDF5 file operation: {e}")
+        print("The HDF5 file might be incomplete or corrupted.")
 
-def concatenate_all_samples(completed_samples):
-    """Concatenate all completed samples into a single NetCDF file."""
-    if not completed_samples:
-        print("No completed samples to concatenate.")
-        return False
-    
-    # Make sure output directory exists
-    if not os.path.exists(OUTPUT_DIR):
-        os.makedirs(OUTPUT_DIR)
-    
-    try:
-        import xarray as xr
-        import numpy as np
-        
-        print(f"Concatenating {len(completed_samples)} samples into a single file...")
-        
-        # Process each sample and add to a list of datasets
-        all_datasets = []
-        
-        for i, sample_id in enumerate(completed_samples):
-            if i % 100 == 0:
-                print(f"Processing sample {i+1}/{len(completed_samples)}")
-            
-            # Get all files for this sample
-            sample_files = sorted(glob.glob(os.path.join(RESULT_DIR, f"res_{sample_id}_*.nc")))
-            
-            if len(sample_files) != FILES_PER_SAMPLE:
-                print(f"Warning: Sample {sample_id} has {len(sample_files)} files, expected {FILES_PER_SAMPLE}")
-                continue
-            
-            try:
-                # Open and concatenate along time dimension
-                sample_datasets = [xr.open_dataset(f) for f in sample_files]
-                sample_concat = xr.concat(sample_datasets, dim="time")
-                
-                # Add sample_id as a coordinate
-                sample_concat = sample_concat.assign_coords(sample_id=sample_id)
-                sample_concat = sample_concat.expand_dims("sample_id")
-                
-                all_datasets.append(sample_concat)
-                
-                # Close all sample datasets to free memory
-                for ds in sample_datasets:
-                    ds.close()
-                    
-            except Exception as e:
-                print(f"Error processing sample {sample_id}: {str(e)}")
-                continue
-        
-        if not all_datasets:
-            print("No datasets were successfully processed.")
-            return False
-            
-        # Combine all samples along sample_id dimension
-        print("Merging all samples...")
-        combined = xr.concat(all_datasets, dim="sample_id")
-        
-        # Save to final output file
-        print(f"Saving to {FINAL_OUTPUT}...")
-        combined.to_netcdf(FINAL_OUTPUT)
-        
-        # Close the combined dataset
-        combined.close()
-        
-        print(f"Successfully concatenated {len(all_datasets)} samples into {FINAL_OUTPUT}")
-        return True
-        
-    except Exception as e:
-        print(f"Error concatenating samples: {str(e)}")
-        return False
 
-def monitor(interval=300):
-    """Monitor progress and concatenate completed samples."""
-    last_concat_count = 0
-    
-    try:
-        while True:
-            # Check progress
-            progress = check_progress()
-            print_report(progress)
-            
-            # Check if we have new completed samples
-            if progress['total_completed'] > last_concat_count:
-                if os.path.exists(FINAL_OUTPUT):
-                    print(f"\nUpdating concatenated file with {progress['total_completed'] - last_concat_count} new samples...")
-                    # For simplicity, we'll regenerate the whole file
-                    # A more complex approach would append only new samples
-                else:
-                    print("\nCreating initial concatenated file...")
-                
-                success = concatenate_all_samples_hdf5(progress['completed'])
-                if success:
-                    last_concat_count = progress['total_completed']
-            
-            # Check if all done
-            if progress['total_completed'] == TOTAL_SAMPLES:
-                print("\nAll samples have been completed and concatenated!")
-                break
-                
-            print(f"\nNext update in {interval//60} minutes. Press Ctrl+C to exit.")
-            time.sleep(interval)
-    except KeyboardInterrupt:
-        print("\nMonitoring stopped.")
 
 def main():
-    if len(sys.argv) > 1 and sys.argv[1] == "--once":
-        # Just check once
-        progress = check_progress()
-        print_report(progress)
-        
-        if progress['completed']:
-            response = input(f"Concatenate {len(progress['completed'])} completed samples? (y/n): ")
-            if response.lower() in ('y', 'yes'):
-                concatenate_all_samples_hdf5(progress['completed'])
+    """Main function to run the progress check and concatenation."""
+    print("--- Starting Script ---")
+    if not os.path.isdir(RESULT_DIR):
+        print(f"ERROR: Result directory not found: {RESULT_DIR}")
+        sys.exit(1)
+
+    # 1. Check Progress
+    progress_data = find_progress(RESULT_DIR, TOTAL_SAMPLES, FILES_PER_SAMPLE)
+
+    # 2. Print Report
+    print_progress_report(progress_data, TOTAL_SAMPLES, FILES_PER_SAMPLE)
+
+    # (Inside main function, after print_progress_report)
+    if progress_data['incomplete']:
+        print(f"\nWARNING: Found {progress_data['total_incomplete']} incomplete samples.")
+        try:
+            # Use input() to ask for confirmation
+            confirm = input("Do you want to delete all .nc files for these incomplete samples? (yes/no): ").lower()
+        except EOFError:
+            confirm = 'no' # Default to no if input is redirected
+    
+        if confirm == 'yes':
+            print("Proceeding with deletion...")
+            # Call a new function or add logic here to delete
+            delete_incomplete_files(progress_data['incomplete'], RESULT_DIR)
+        else:
+            print("Deletion skipped.")
+
+    # 3. Ask to Concatenate
+    if progress_data['completed']:
+        try:
+            response = 'y'
+            #response = input(f"Concatenate {progress_data['total_completed']} completed samples? (y/n): ").lower()
+        except EOFError: # Handle cases where input is piped or unavailable
+             response = 'n'
+             print("\nNo input detected, skipping concatenation.")
+
+        if response in ('y', 'yes'):
+            concatenate_to_hdf5(
+                progress_data['completed'],
+                RESULT_DIR,
+                FINAL_OUTPUT,
+                FILES_PER_SAMPLE
+            )
+        else:
+            print("Concatenation skipped by user.")
     else:
-        # Monitor continuously
-        interval = 300
-        if len(sys.argv) > 1:
-            try:
-                interval = int(sys.argv[1]) * 60
-            except ValueError:
-                print(f"Invalid interval: {sys.argv[1]}. Using default 5 minutes.")
-                
-        monitor(interval)
+        print("No completed samples found to concatenate.")
+
+    print("--- Script Finished ---")
 
 if __name__ == "__main__":
     main()
