@@ -142,7 +142,7 @@ if __name__ == "__main__":
     data_directory_wake = './uniform_results/wake/'
     data_directory_no_wake = './uniform_results/no_wake/'
     first_sample_to_plot = 1
-    number_of_samples_to_plot = 500
+    number_of_samples_to_plot = 50
     target_sample_ids = list(range(first_sample_to_plot, first_sample_to_plot + number_of_samples_to_plot))
     num_turbines_to_include_for_neighbor_cases = 65
     rolling_window_days = 360
@@ -355,9 +355,9 @@ if __name__ == "__main__":
             print("Optimizing: Pre-fetching data to NumPy arrays for plotting...")
             try:
                 if hasattr(plot_data_array.coords['time'], 'compute'):
-                    time_values_np = plot_data_array.coords['time'].compute().data
+                    time_values_np = plot_data_array.coords['time'].compute().data / 360
                 else:
-                    time_values_np = plot_data_array.coords['time'].data
+                    time_values_np = plot_data_array.coords['time'].data / 360
                 
                 if hasattr(plot_data_array, 'compute'):
                     plot_data_numpy = plot_data_array.compute().data
@@ -407,7 +407,7 @@ if __name__ == "__main__":
             if not isolated_sim_smoothed_power.isnull().all():
                 key_isolated = 'isolated_baseline'
                 label_isolated = my_names.get(key_isolated, "Isolated Baseline")
-                line, = ax.plot(isolated_sim_smoothed_power.time.values, isolated_sim_smoothed_power.values,
+                line, = ax.plot(isolated_sim_smoothed_power.time.values / 360, isolated_sim_smoothed_power.values,
                                 color=colors[key_isolated], label=label_isolated,
                                 linewidth=2.0, linestyle='-')
                 if key_isolated not in legend_artist_map:
@@ -417,7 +417,7 @@ if __name__ == "__main__":
             if not time_varying_max_potential_smoothed.isnull().all():
                 key_max_power = 'max_potential_time_varying'
                 label_max_power = my_names.get(key_max_power, "Max Potential Power")
-                line, = ax.plot(time_varying_max_potential_smoothed.time.values,
+                line, = ax.plot(time_varying_max_potential_smoothed.time.values / 360,
                                 time_varying_max_potential_smoothed.values,
                                 color=colors[key_max_power],
                                 label=label_max_power, linewidth=2.0, linestyle='-')

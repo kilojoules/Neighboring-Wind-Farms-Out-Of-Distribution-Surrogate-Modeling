@@ -25,8 +25,9 @@ with h5py.File('re_precomputed_layouts.h5', 'r') as f:
        #if turbine != 5: continue
        if farm == 0 and seed == 0 and turbine == 5:
            plt.scatter(x, y, c='k', alpha=1, s=SIZE)
-       else:
-           plt.scatter(x, y, c='k', alpha=0.003, s=SIZE)
+       elif turbine == 1:
+       #else:
+           plt.scatter(x, y, c='k', alpha=0.005, s=SIZE)
 plt.legend()
 plt.savefig('zones_updated')
 plt.clf()
