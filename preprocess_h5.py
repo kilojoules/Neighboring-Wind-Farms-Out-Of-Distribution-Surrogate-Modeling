@@ -1,6 +1,7 @@
 import h5py
 import xarray as xr
 import numpy as np
+import sys
 import os
 from sklearn.model_selection import train_test_split
 
@@ -126,7 +127,8 @@ if __name__ == "__main__":
     # --- Configuration ---
     # Adjust this variable for each run to process different data sets
     # e.g., "uniform_results", "exponential_1yr_results", "exponential_2yr_results"
-    RESULTS_SUBDIR = "exponential_1yr_results" # Set this for the current run
+    RESULTS_SUBDIR = sys.argv[1]
+    #RESULTS_SUBDIR = "exponential_1yr_results" # Set this for the current run
 
     H5_RESULTS_FILE = os.path.join(f'./{RESULTS_SUBDIR}/concatenated/', 'all_samples.h5')
     
